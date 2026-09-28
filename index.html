@@ -2,8 +2,11 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+  >
 
   <title>Сканирование QR</title>
 
@@ -35,6 +38,7 @@
       background: white;
       max-width: 500px;
       font-size: 16px;
+      line-height: 1.4;
     }
 
     #reader {
@@ -72,6 +76,10 @@
       color: #222;
     }
 
+    button:disabled {
+      opacity: 0.6;
+    }
+
     #error {
       display: none;
       margin: 15px auto;
@@ -96,33 +104,33 @@
 
 <body>
 
-  <h1>📷 Сканирование QR-кода</h1>
+<h1>📷 Сканирование QR-кода</h1>
 
-  <div id="status">
-    Нажмите «Включить камеру».
-  </div>
+<div id="status">
+  Нажмите «Включить камеру».
+</div>
 
-  <div id="reader"></div>
+<div id="reader"></div>
 
-  <div id="error"></div>
+<div id="error"></div>
 
-  <div>
-    <button id="startButton" onclick="startCamera()">
-      📷 Включить камеру
-    </button>
+<div>
+  <button id="startButton" onclick="startCamera()">
+    📷 Включить камеру
+  </button>
 
-    <button id="stopButton" onclick="stopCamera()">
-      ⏹ Остановить
-    </button>
+  <button id="stopButton" onclick="stopCamera()">
+    ⏹ Остановить
+  </button>
 
-    <button id="backButton" onclick="goBack()">
-      ← Вернуться
-    </button>
-  </div>
+  <button id="backButton" onclick="goBack()">
+    ← Вернуться
+  </button>
+</div>
 
-  <div class="hint">
-    Разрешите доступ к камере, затем наведите камеру на QR-код участника.
-  </div>
+<div class="hint">
+  Разрешите доступ к камере, затем наведите камеру на QR-код участника.
+</div>
 
 <script>
 
@@ -130,37 +138,108 @@
   let cameraRunning = false;
   let processingScan = false;
 
-  /*
-   * Адрес страницы приложения, которое открыло камеру.
-   */
   const params = new URLSearchParams(window.location.search);
-  const returnOrigin = params.get("returnOrigin");
 
   /*
-   * Если Camera.html открыт напрямую, а не из приложения,
-   * возвращать результат некуда.
+   * Адрес приложения посещаемости.
+   * Например:
+   * https://script.google.com/macros/s/XXXXXXXX/exec
    */
-  if (!returnOrigin) {
+  const returnUrl = params.get("returnUrl");
+
+  /*
+   * Origin приложения.
+   * Нужен для postMessage.
+   */
+  const returnOrigin = params.get("returnOrigin");
+
+
+  /*
+   * Проверяем, что Camera.html был открыт приложением.
+   */
+  if (!returnUrl) {
+
     showError(
       "Эта страница должна быть открыта из приложения посещаемости.\n\n" +
       "Откройте приложение и нажмите «Начать сканирование»."
     );
   }
 
-  /*
-   * Отправка сообщения обратно в приложение.
-   */
-  function sendToParent(message) {
 
-    if (!window.opener || window.opener.closed) {
-      showError(
-        "Не удалось связаться с приложением посещаемости.\n\n" +
-        "Вернитесь в приложение и попробуйте ещё раз."
+  /*
+   * Пытаемся вернуть результат через postMessage.
+   *
+   * Если window.opener недоступен, используем запасной способ:
+   * возвращаемся на URL приложения с QR-кодом в параметре qr.
+   */
+  function sendQrToApplication(decodedText) {
+
+    /*
+     * Вариант 1 — postMessage.
+     */
+    if (
+      window.opener &&
+      !window.opener.closed &&
+      returnOrigin
+    ) {
+
+      try {
+
+        window.opener.postMessage(
+          {
+            type: "QR_SCANNED",
+            text: String(decodedText)
+          },
+          returnOrigin
+        );
+
+        /*
+         * После отправки всё равно возвращаемся назад.
+         * Это делает поведение одинаковым на разных телефонах.
+         */
+        setTimeout(function() {
+          try {
+            window.close();
+          } catch (e) {
+          }
+        }, 500);
+
+        return;
+      }
+
+      catch (error) {
+
+        console.warn(
+          "postMessage не сработал:",
+          error
+        );
+      }
+    }
+
+
+    /*
+     * Вариант 2 — надёжный fallback.
+     *
+     * Переходим обратно в Apps Script с QR-кодом.
+     */
+    if (returnUrl) {
+
+      const url = new URL(returnUrl);
+
+      url.searchParams.set(
+        "qr",
+        String(decodedText)
       );
+
+      window.location.href = url.toString();
+
       return;
     }
 
-    window.opener.postMessage(message, returnOrigin);
+
+    showError(
+      "Не удалось вернуть результат в приложение посещаемости."
+    );
   }
 
 
@@ -169,7 +248,7 @@
    */
   async function startCamera() {
 
-    if (!returnOrigin) {
+    if (!returnUrl) {
       return;
     }
 
@@ -185,59 +264,63 @@
 
     try {
 
-      /*
-       * Получаем реальные камеры устройства.
-       *
-       * Это надёжнее, чем сразу передавать facingMode.
-       */
-      const cameras = await Html5Qrcode.getCameras();
+      const cameras =
+        await Html5Qrcode.getCameras();
 
       if (!cameras || cameras.length === 0) {
-        throw new Error("Камеры на устройстве не найдены.");
+        throw new Error(
+          "Камеры на устройстве не найдены."
+        );
       }
 
+
       /*
-       * Пытаемся выбрать заднюю камеру.
-       *
-       * На разных устройствах название может быть:
-       * "back", "rear", "environment" и т.п.
+       * Ищем заднюю камеру.
        */
-      let selectedCamera = cameras.find(camera => {
+      let selectedCamera = cameras.find(
+        function(camera) {
 
-        const label = (camera.label || "").toLowerCase();
+          const label =
+            (camera.label || "").toLowerCase();
 
-        return (
-          label.includes("back") ||
-          label.includes("rear") ||
-          label.includes("environment") ||
-          label.includes("зад")
-        );
+          return (
+            label.includes("back") ||
+            label.includes("rear") ||
+            label.includes("environment") ||
+            label.includes("зад")
+          );
+        }
+      );
 
-      });
 
       /*
-       * Если определить заднюю камеру по названию не удалось,
-       * берём первую доступную.
+       * Если название камеры ничего не говорит,
+       * используем первую доступную.
        */
       if (!selectedCamera) {
         selectedCamera = cameras[0];
       }
 
+
       setStatus(
-        "Камера: " +
-        (selectedCamera.label || "камера устройства") +
-        "\n\nНаводите камеру на QR-код."
+        "Камера найдена.\n\n" +
+        "Наведите её на QR-код."
       );
 
-      scanner = new Html5Qrcode("reader");
+
+      scanner =
+        new Html5Qrcode("reader");
+
 
       const config = {
         fps: 10,
+
         qrbox: {
           width: 250,
           height: 250
         }
       };
+
 
       await scanner.start(
         selectedCamera.id,
@@ -246,60 +329,132 @@
         onScanError
       );
 
+
       cameraRunning = true;
 
-      document.getElementById("startButton").style.display = "none";
-      document.getElementById("stopButton").style.display = "inline-block";
 
-      setStatus("📷 Камера работает. Наведите её на QR-код.");
+      document.getElementById(
+        "startButton"
+      ).style.display = "none";
 
-      sendToParent({
-        type: "CAMERA_READY"
-      });
+      document.getElementById(
+        "stopButton"
+      ).style.display = "inline-block";
+
+
+      setStatus(
+        "📷 Камера работает.\n\n" +
+        "Наведите её на QR-код."
+      );
+
+
+      /*
+       * Сообщаем приложению,
+       * что камера успешно запустилась.
+       */
+      if (
+        window.opener &&
+        !window.opener.closed &&
+        returnOrigin
+      ) {
+
+        try {
+
+          window.opener.postMessage(
+            {
+              type: "CAMERA_READY"
+            },
+            returnOrigin
+          );
+
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+
 
     } catch (error) {
 
       console.error(error);
 
-      document.getElementById("startButton").disabled = false;
+      document.getElementById(
+        "startButton"
+      ).disabled = false;
 
-      let message = "";
 
-      if (error && error.name === "NotAllowedError") {
+      let message;
+
+
+      if (
+        error &&
+        error.name === "NotAllowedError"
+      ) {
 
         message =
           "Браузер не разрешил доступ к камере.\n\n" +
-          "Проверьте разрешение камеры для сайта " +
+          "Разрешите доступ к камере для сайта " +
           window.location.hostname +
           " и попробуйте ещё раз.";
 
-      } else if (error && error.name === "NotFoundError") {
+      }
+
+      else if (
+        error &&
+        error.name === "NotFoundError"
+      ) {
 
         message =
           "Камера не найдена на этом устройстве.";
 
-      } else {
+      }
+
+      else {
 
         message =
           "Не удалось получить доступ к камере.\n\n" +
           "Техническая информация:\n" +
-          String(error && error.message ? error.message : error);
+          String(
+            error && error.message
+              ? error.message
+              : error
+          );
       }
+
 
       showError(message);
 
-      sendToParent({
-        type: "CAMERA_ERROR",
-        error: message
-      });
+
+      if (
+        window.opener &&
+        !window.opener.closed &&
+        returnOrigin
+      ) {
+
+        try {
+
+          window.opener.postMessage(
+            {
+              type: "CAMERA_ERROR",
+              error: message
+            },
+            returnOrigin
+          );
+
+        } catch (e) {
+          console.warn(e);
+        }
+      }
     }
   }
 
 
   /*
-   * Успешно найден QR-код.
+   * QR найден.
    */
-  async function onScanSuccess(decodedText, decodedResult) {
+  async function onScanSuccess(
+    decodedText,
+    decodedResult
+  ) {
 
     if (processingScan) {
       return;
@@ -307,39 +462,33 @@
 
     processingScan = true;
 
-    console.log("QR:", decodedText);
 
-    setStatus("✅ QR-код найден!");
+    console.log(
+      "QR-код:",
+      decodedText
+    );
+
+
+    setStatus(
+      "✅ QR-код найден!\n\n" +
+      "Возвращаемся в приложение…"
+    );
+
 
     await stopCamera();
 
-    /*
-     * Передаём текст QR-кода обратно в Index.html.
-     */
-    sendToParent({
-      type: "QR_SCANNED",
-      text: String(decodedText)
-    });
 
     /*
-     * Даём родительской странице время получить сообщение,
-     * после чего пытаемся закрыть вкладку.
+     * Возвращаем QR в приложение.
      */
-    setTimeout(() => {
-      try {
-        window.close();
-      } catch (e) {
-        // Ничего страшного, пользователь может вернуться вручную.
-      }
-    }, 500);
+    sendQrToApplication(decodedText);
   }
 
 
   /*
-   * Ошибки отдельных кадров при сканировании.
+   * Ошибки отдельных кадров.
    *
-   * Их НЕ показываем пользователю:
-   * отсутствие QR-кода в конкретном кадре — это нормально.
+   * Отсутствие QR в кадре — нормальная ситуация.
    */
   function onScanError(errorMessage) {
     // Ничего не делаем.
@@ -355,6 +504,7 @@
       return;
     }
 
+
     try {
 
       if (cameraRunning) {
@@ -363,47 +513,77 @@
 
     } catch (error) {
 
-      console.warn("Ошибка остановки камеры:", error);
-
+      console.warn(
+        "Ошибка остановки камеры:",
+        error
+      );
     }
+
 
     try {
       scanner.clear();
+
     } catch (error) {
-      console.warn("Ошибка очистки сканера:", error);
+
+      console.warn(
+        "Ошибка очистки сканера:",
+        error
+      );
     }
+
 
     scanner = null;
     cameraRunning = false;
 
-    document.getElementById("stopButton").style.display = "none";
-    document.getElementById("startButton").style.display = "inline-block";
-    document.getElementById("startButton").disabled = false;
+
+    document.getElementById(
+      "stopButton"
+    ).style.display = "none";
+
+
+    document.getElementById(
+      "startButton"
+    ).style.display = "inline-block";
+
+
+    document.getElementById(
+      "startButton"
+    ).disabled = false;
   }
 
 
   /*
-   * Получаем команды от Index.html.
+   * Получаем команды от приложения.
    */
-  window.addEventListener("message", async function(event) {
+  window.addEventListener(
+    "message",
+    async function(event) {
 
-    /*
-     * Принимаем команды только от того origin,
-     * который был передан при открытии страницы.
-     */
-    if (event.origin !== returnOrigin) {
-      return;
+      if (
+        returnOrigin &&
+        event.origin !== returnOrigin
+      ) {
+        return;
+      }
+
+
+      if (
+        !event.data ||
+        typeof event.data !== "object"
+      ) {
+        return;
+      }
+
+
+      if (
+        event.data.type === "STOP_CAMERA"
+      ) {
+
+        await stopCamera();
+      }
+
     }
-
-    if (!event.data || typeof event.data !== "object") {
-      return;
-    }
-
-    if (event.data.type === "STOP_CAMERA") {
-      await stopCamera();
-    }
-
-  });
+  );
 
 
   /*
@@ -416,30 +596,47 @@
     try {
       window.close();
     } catch (e) {
-      // Браузер может запретить закрытие вкладки.
+    }
+
+
+    /*
+     * Если браузер не разрешил закрыть вкладку,
+     * возвращаемся вручную.
+     */
+    if (returnUrl) {
+      window.location.href = returnUrl;
     }
   }
 
 
   function setStatus(text) {
-    document.getElementById("status").textContent = text;
+
+    document.getElementById(
+      "status"
+    ).textContent = text;
   }
 
 
   function showError(text) {
 
-    const element = document.getElementById("error");
+    const element =
+      document.getElementById("error");
 
     element.textContent = text;
+
     element.style.display = "block";
 
-    setStatus("⚠️ Не удалось запустить камеру.");
+    setStatus(
+      "⚠️ Не удалось запустить камеру."
+    );
   }
 
 
   function hideError() {
 
-    document.getElementById("error").style.display = "none";
+    document.getElementById(
+      "error"
+    ).style.display = "none";
   }
 
 </script>

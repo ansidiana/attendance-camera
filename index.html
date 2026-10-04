@@ -639,6 +639,13 @@
     ).style.display = "none";
   }
 
+  // Автоматически запускаем камеру при открытии страницы.
+  window.addEventListener("load", function () {
+    if (returnUrl) {
+      startCamera();
+    }
+  });
+
 </script>
 
 </body>
